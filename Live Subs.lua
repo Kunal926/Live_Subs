@@ -8,18 +8,17 @@ local TMP_WAV_PATH = utils.join_path(TMP_DIR, "mpv_whisper_live_tmp.wav")
 local WHISPER_CMD = 'D:/Whisper/whisper.cpp/build/bin/Release/main.exe'
 local WHISPER_MODEL = 'D:/Whisper/whisper.cpp/models/ggml-medium.en.bin' -- Change to a larger model if needed
 local FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe'
-local CHUNK_DURATION_MS = 15000 -- 15 seconds
 local THREADS = 6
 local LANGUAGE = "en"
 local INIT_POS = 0 -- starting position to start creating subs in ms
-local MAIN_SRT_PATH = TMP_DIR .. "/mpv_whisper_main_subs.srt" -- Path to accumulate all subtitle chunks
+local MAIN_SRT_PATH = utils.join_path(TMP_DIR, "mpv_whisper_main_subs.srt") -- Path to accumulate all subtitle chunks
 
 -- Global state tracking
 local running = false
 local loopRunning = false
 
 -- Define log file path
-local LOG_FILE_PATH = TMP_DIR .. "/mpv_whisper_log.txt"
+local LOG_FILE_PATH = utils.join_path(TMP_DIR, "mpv_whisper_log.txt")
 
 -- Ensure TMP_DIR exists
 os.execute('mkdir "' .. TMP_DIR .. '"')
@@ -27,6 +26,11 @@ os.execute('mkdir "' .. TMP_DIR .. '"')
 -- Function to log messages to a file
 local function logMessage(message)
     msg.info(message)
+    local log_file = io.open(LOG_FILE_PATH, "a")
+    if log_file then
+        log_file:write(os.date("[%Y-%m-%d %H:%M:%S] ") .. message .. "\n")
+        log_file:close()
+    end
 end
 
 -- Function to run commands with enhanced logging and error handling
@@ -104,9 +108,9 @@ local function appendToMainSRT(new_srt_path)
     logMessage("Subtitles added to mpv: " .. MAIN_SRT_PATH)
 end
 
--- Function to extract a chunk of audio using FFmpeg
-local function extractAudioChunk(media_path, start_ms, duration_ms, callback)
-    logMessage("Extracting audio chunk: start_ms=" .. start_ms .. ", duration_ms=" .. duration_ms)
+-- Function to extract audio using FFmpeg
+local function extractAudio(media_path, start_ms, duration_ms, callback)
+    logMessage("Extracting audio: start_ms=" .. start_ms .. ", duration_ms=" .. duration_ms)
 
     local args = {
         "-ss", tostring(start_ms / 1000),
@@ -116,6 +120,7 @@ local function extractAudioChunk(media_path, start_ms, duration_ms, callback)
         "-ac", "1",
         "-ar", "16000",
         "-acodec", "pcm_s16le",
+        "-af", "loudnorm", -- Apply loudness normalization
         "-y", TMP_WAV_PATH
     }
 
@@ -130,7 +135,7 @@ local function extractAudioChunk(media_path, start_ms, duration_ms, callback)
         if file then
             local size = file:seek("end")
             file:close()
-            logMessage("Audio chunk extracted to " .. TMP_WAV_PATH .. " (Size: " .. size .. " bytes)")
+            logMessage("Audio extracted to " .. TMP_WAV_PATH .. " (Size: " .. size .. " bytes)")
             if size and size > 0 then
                 logMessage("Calling transcribeAudio function.")
                 callback()
@@ -192,27 +197,10 @@ local function adjustTimestamps(srt_input_path, srt_output_path, chunk_start_tim
     return true
 end
 
--- Function to convert timestamp to milliseconds
-local function convertToMilliseconds(timestamp)
-    local hours, minutes, seconds, milliseconds = timestamp:match("(%d%d):(%d%d):(%d%d),(%d%d%d)")
-    return (tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)) * 1000 + tonumber(milliseconds)
-end
-
--- Function to convert milliseconds to timestamp
-local function convertToTimestamp(milliseconds)
-    local hours = math.floor(milliseconds / 3600000)
-    milliseconds = milliseconds % 3600000
-    local minutes = math.floor(milliseconds / 60000)
-    milliseconds = milliseconds % 60000
-    local seconds = math.floor(milliseconds / 1000)
-    milliseconds = milliseconds % 1000
-    return string.format("%02d:%02d:%02d,%03d", hours, minutes, seconds, milliseconds)
-end
-
 -- Function to transcribe audio using Whisper
 local function transcribeAudio(chunk_start_time_ms, callback)
     logMessage("Starting transcription with Whisper.")
-    local whisper_output = TMP_DIR .. "/mpv_whisper_live_sub" -- Output without extension
+    local whisper_output = utils.join_path(TMP_DIR, "mpv_whisper_live_sub") -- Output without extension
     local args = {
         "-m", WHISPER_MODEL,
         "-t", tostring(THREADS),
@@ -221,7 +209,8 @@ local function transcribeAudio(chunk_start_time_ms, callback)
         "--file", TMP_WAV_PATH,
         "--output-file", whisper_output, -- Do not include .srt extension
         "--beam-size", "5", -- Use beam search with size 5 for better accuracy
-        "--best-of", "5" -- Consider the best of 5 candidates
+        "--best-of", "5", -- Consider the best of 5 candidates
+        "--max-len", "1" -- Limit the length of each segment
     }
     runCommand(WHISPER_CMD, args, function(output, success, elapsed_time)
         if not success then
@@ -231,7 +220,7 @@ local function transcribeAudio(chunk_start_time_ms, callback)
         end
         logMessage("Transcription completed.")
         local srt_input_path = whisper_output .. ".srt"
-        local srt_adjusted_path = TMP_DIR .. "/mpv_whisper_live_sub_adjusted.srt"
+        local srt_adjusted_path = utils.join_path(TMP_DIR, "mpv_whisper_live_sub_adjusted.srt")
         local adjusted = adjustTimestamps(srt_input_path, srt_adjusted_path, chunk_start_time_ms)
         if adjusted then
             appendToMainSRT(srt_adjusted_path)
@@ -261,6 +250,7 @@ local function processLiveSubtitles(media_path)
     duration = duration * 1000 -- Convert to milliseconds
     logMessage("Media duration: " .. duration .. " ms")
     local current_time = INIT_POS
+    local chunk_duration_ms = 60000 -- Process 60-second chunks
 
     local function loop()
         logMessage("Loop iteration started.")
@@ -279,16 +269,22 @@ local function processLiveSubtitles(media_path)
             return
         end
 
-        logMessage("Calling extractAudioChunk.")
-        extractAudioChunk(media_path, current_time, CHUNK_DURATION_MS, function()
-            logMessage("extractAudioChunk callback executed.")
+        -- Adjust chunk duration if remaining time is less
+        local remaining_time = duration - current_time
+        if remaining_time < chunk_duration_ms then
+            chunk_duration_ms = remaining_time
+        end
+
+        logMessage("Calling extractAudio.")
+        extractAudio(media_path, current_time, chunk_duration_ms, function()
+            logMessage("extractAudio callback executed.")
             transcribeAudio(current_time, function()
                 logMessage("transcribeAudio callback executed.")
                 -- Advance current time
-                current_time = current_time + CHUNK_DURATION_MS
+                current_time = current_time + chunk_duration_ms
                 -- Schedule next chunk
                 if running then
-                    mp.add_timeout(1.0, loop) -- Increased delay to ensure transcription completes before next chunk
+                    mp.add_timeout(0.5, loop) -- Short delay before next chunk
                 end
             end)
         end)
@@ -338,40 +334,17 @@ end
 local function toggle()
     logMessage("Toggle function called.")
     if running then
-        running = false
+        stop()
         mp.commandv('show-text', 'Whisper subtitles: Off')
         mp.unregister_event("start-file", start)
         mp.unregister_event("end-file", stop)
-        stop()
     else
-        running = true
+        start()
         mp.commandv('show-text', 'Whisper subtitles: On')
         mp.register_event("start-file", start)
         mp.register_event("end-file", stop)
-        start()
     end
 end
-
--- Key binding to start the live subtitle processing
-mp.add_key_binding("ctrl+alt+s", "start_live_subtitles", function()
-    local media_path = mp.get_property("path")
-    if not media_path then
-        mp.osd_message("No media file is loaded.", 2)
-        return
-    end
-    processLiveSubtitles(media_path)
-end)
-
--- Key binding to stop the live subtitle processing
-mp.add_key_binding("ctrl+shift+s", "stop_live_subtitles", function()
-    if running then
-        running = false
-        mp.osd_message("Whisper Subtitles: Stopping...", 2)
-        logMessage("User requested to stop Whisper subtitles.")
-    else
-        mp.osd_message("Whisper Subtitles: Not running.", 2)
-    end
-end)
 
 -- Key binding to toggle the live subtitle processing
 mp.add_key_binding('ctrl+w', 'whisper_subs_toggle', toggle)
