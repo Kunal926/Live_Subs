@@ -6,11 +6,11 @@ local msg = require 'mp.msg'
 local TMP_DIR = "C:/temp"
 local TMP_WAV_PATH = utils.join_path(TMP_DIR, "mpv_whisper_live_tmp.wav")
 local WHISPER_CMD = 'D:/Whisper/whisper.cpp/build/bin/Release/main.exe'
-local WHISPER_MODEL = 'D:/Whisper/whisper.cpp/models/ggml-medium.en.bin' -- Change to a larger model if needed
+local WHISPER_MODEL = 'D:/Whisper/whisper.cpp/models/ggml-large-v3-turbo.bin'
 local FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe'
-local THREADS = 6
+local THREADS = 8
 local LANGUAGE = "en"
-local INIT_POS = 0 -- starting position to start creating subs in ms
+local INIT_POS = 0 -- Starting position to start creating subs in ms
 local MAIN_SRT_PATH = utils.join_path(TMP_DIR, "mpv_whisper_main_subs.srt") -- Path to accumulate all subtitle chunks
 
 -- Global state tracking
@@ -210,7 +210,6 @@ local function transcribeAudio(chunk_start_time_ms, callback)
         "--output-file", whisper_output, -- Do not include .srt extension
         "--beam-size", "5", -- Use beam search with size 5 for better accuracy
         "--best-of", "5", -- Consider the best of 5 candidates
-        "--max-len", "1" -- Limit the length of each segment
     }
     runCommand(WHISPER_CMD, args, function(output, success, elapsed_time)
         if not success then
