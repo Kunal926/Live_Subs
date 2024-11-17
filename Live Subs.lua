@@ -1,6 +1,7 @@
 -- Required modules
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
+local json = require 'mp.utils'.parse_json -- Utilize mpv's built-in JSON parser
 
 -- Define constants
 local TMP_DIR = "C:/temp"
@@ -12,11 +13,11 @@ local THREADS = 8
 local LANGUAGE = "en"
 local INIT_POS = 0 -- Starting position to start creating subs in ms
 local MAIN_SRT_PATH = utils.join_path(TMP_DIR, "mpv_whisper_main_subs.srt") -- Path to accumulate all subtitle chunks
+local VAD_SCRIPT_PATH = "C:/Users/chahe/OneDrive/Desktop/software/Scripts/vad_script.py" -- Updated VAD script path
 
 -- Global state tracking
 local running = false
 local loopRunning = false
-local prev_sub_ass_override = nil
 
 -- Define log file path
 local LOG_FILE_PATH = utils.join_path(TMP_DIR, "mpv_whisper_log.txt")
@@ -61,17 +62,14 @@ local function runCommand(executable, args_table, callback)
     local end_time = mp.get_time()
     local elapsed_time = end_time - start_time
 
-    -- Log any errors or outputs
+    -- Log all outputs
+    logMessage('Command Output (stdout): ' .. (res.stdout or ''))
+    logMessage('Command Output (stderr): ' .. (res.stderr or ''))
+
     if res.error then
         logMessage('Command Error: ' .. res.error)
-    end
-
-    if res.status == 0 then
-        logMessage('Command Output (stdout): ' .. (res.stdout or ''))
-        logMessage('Command Output (stderr): ' .. (res.stderr or ''))
     else
-        logMessage('Command Error Output (stdout): ' .. (res.stdout or ''))
-        logMessage('Command Error Output (stderr): ' .. (res.stderr or ''))
+        logMessage('Command exited with status: ' .. tostring(res.status))
     end
 
     logMessage(string.format('Command execution time: %.2f seconds', elapsed_time))
@@ -84,6 +82,7 @@ end
 
 -- Function to append new subtitles to the main SRT file
 local function appendToMainSRT(new_srt_path)
+    logMessage("Attempting to append new subtitles to main SRT.")
     local new_srt_file = io.open(new_srt_path, "r")
     if not new_srt_file then
         logMessage("New subtitle file not found: " .. new_srt_path)
@@ -109,6 +108,34 @@ local function appendToMainSRT(new_srt_path)
     logMessage("Subtitles added to mpv: " .. MAIN_SRT_PATH)
 end
 
+-- Function to append adjusted SRT content to the main SRT file
+local function appendToMainSRT(srt_adjusted_path)
+    local adjusted_file = io.open(srt_adjusted_path, "r")
+    if not adjusted_file then
+        logMessage("Failed to open adjusted SRT file: " .. srt_adjusted_path)
+        return false
+    end
+
+    local adjusted_content = adjusted_file:read("*all")
+    adjusted_file:close()
+
+    -- Append adjusted content to the main SRT file
+    local main_srt_file = io.open(MAIN_SRT_PATH, "a")
+    if not main_srt_file then
+        logMessage("Failed to open main SRT file: " .. MAIN_SRT_PATH)
+        return false
+    end
+    main_srt_file:write(adjusted_content)
+    main_srt_file:close()
+    logMessage("Appended new subtitles to main subtitle file: " .. MAIN_SRT_PATH)
+    
+    -- Refresh subtitles in the media player (mpv command)
+    mp.commandv("sub-reload")
+    logMessage("Subtitles reloaded in mpv.")
+
+    return true
+end
+
 -- Function to extract audio using FFmpeg
 local function extractAudio(media_path, start_ms, duration_ms, callback)
     logMessage("Extracting audio: start_ms=" .. start_ms .. ", duration_ms=" .. duration_ms)
@@ -117,11 +144,11 @@ local function extractAudio(media_path, start_ms, duration_ms, callback)
         "-ss", tostring(start_ms / 1000),
         "-t", tostring(duration_ms / 1000),
         "-i", media_path,
-        "-map", "0:a:m:language:eng", -- Select English audio track based on metadata
+        "-map", "0:a:m:language:eng", -- Ensure this correctly selects the English audio stream
         "-ac", "1",
         "-ar", "16000",
         "-acodec", "pcm_s16le",
-        "-af", "loudnorm", -- Apply loudness normalization
+        "-af", "aresample=resampler=soxr",
         "-y", TMP_WAV_PATH
     }
 
@@ -138,7 +165,7 @@ local function extractAudio(media_path, start_ms, duration_ms, callback)
             file:close()
             logMessage("Audio extracted to " .. TMP_WAV_PATH .. " (Size: " .. size .. " bytes)")
             if size and size > 0 then
-                logMessage("Calling transcribeAudio function.")
+                logMessage("Calling VAD function.")
                 callback()
             else
                 logMessage("Extracted WAV file is empty: " .. TMP_WAV_PATH)
@@ -151,45 +178,74 @@ local function extractAudio(media_path, start_ms, duration_ms, callback)
     end)
 end
 
+-- Function to run Silero VAD and get speech segments
+local function runVAD(callback)
+    logMessage("Running Silero VAD on extracted audio.")
+
+    local args = {
+        VAD_SCRIPT_PATH,
+        TMP_WAV_PATH,
+        "16000",      -- Sampling rate
+        "normal"      -- VAD mode ('normal', 'aggressive', etc.)
+    }
+
+    runCommand('python', args, function(output, success, elapsed_time)
+        if not success then
+            logMessage("VAD command failed.")
+            running = false
+            return
+        end
+
+        -- Parse JSON output
+        local speech_segments, err = json(output)
+        if not speech_segments then
+            logMessage("Failed to parse VAD JSON output: " .. (err or "unknown error"))
+            running = false
+            return
+        end
+
+        logMessage("VAD detected " .. #speech_segments .. " speech segments.")
+
+        if #speech_segments == 0 then
+            logMessage("No speech segments detected in this chunk.")
+            -- Optionally, proceed without transcription or wait for the next chunk
+            if callback then callback({}) end
+            return
+        end
+
+        logMessage("Proceeding to transcribe detected speech segments.")
+        callback(speech_segments)
+    end)
+end
+
 -- Function to adjust timestamps in the SRT file
-local function adjustTimestamps(srt_input_path, srt_output_path, chunk_start_time_ms)
-    logMessage("Adjusting timestamps in: " .. srt_input_path)
+local function adjustTimestamps(srt_input_path, srt_output_path, time_offset_ms)
     local input_file = io.open(srt_input_path, "r")
     if not input_file then
-        logMessage("Failed to open input SRT file: " .. srt_input_path)
+        logMessage("Failed to open SRT input file: " .. srt_input_path)
         return false
     end
 
     local content = input_file:read("*all")
     input_file:close()
 
-    -- Pattern to match timestamps in SRT files
-    local timestamp_pattern = "(%d%d):(%d%d):(%d%d),(%d%d%d)"
-
-    -- Function to adjust a single timestamp
-    local function shiftTimestamp(h, m, s, ms)
-        local total_ms = (((tonumber(h) * 60 + tonumber(m)) * 60) + tonumber(s)) * 1000 + tonumber(ms)
-        total_ms = total_ms + chunk_start_time_ms
-
-        local new_h = math.floor(total_ms / (60 * 60 * 1000))
-        local new_m = math.floor((total_ms % (60 * 60 * 1000)) / (60 * 1000))
-        local new_s = math.floor((total_ms % (60 * 1000)) / 1000)
-        local new_ms = total_ms % 1000
-
-        return string.format("%02d:%02d:%02d,%03d", new_h, new_m, new_s, new_ms)
-    end
-
-    -- Replace timestamps in the content
-    local adjusted_content = content:gsub("(" .. timestamp_pattern .. ")%s*-->%s*(" .. timestamp_pattern .. ")", function(start_ts, h1, m1, s1, ms1, end_ts, h2, m2, s2, ms2)
-        local new_start_ts = shiftTimestamp(h1, m1, s1, ms1)
-        local new_end_ts = shiftTimestamp(h2, m2, s2, ms2)
-        return new_start_ts .. " --> " .. new_end_ts
+    -- Adjust the timestamps
+    local adjusted_content = content:gsub("(%d%d:%d%d:%d%d),(%d%d%d)", function(time_str, ms_str)
+        local hours, minutes, seconds = time_str:match("(%d%d):(%d%d):(%d%d)")
+        local total_ms = (tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)) * 1000 + tonumber(ms_str)
+        local adjusted_ms = total_ms + time_offset_ms
+        local adjusted_hours = math.floor(adjusted_ms / (3600 * 1000))
+        adjusted_ms = adjusted_ms % (3600 * 1000)
+        local adjusted_minutes = math.floor(adjusted_ms / (60 * 1000))
+        adjusted_ms = adjusted_ms % (60 * 1000)
+        local adjusted_seconds = math.floor(adjusted_ms / 1000)
+        adjusted_ms = adjusted_ms % 1000
+        return string.format("%02d:%02d:%02d,%03d", adjusted_hours, adjusted_minutes, adjusted_seconds, adjusted_ms)
     end)
 
-    -- Write the adjusted content to the output file
     local output_file = io.open(srt_output_path, "w")
     if not output_file then
-        logMessage("Failed to open output SRT file: " .. srt_output_path)
+        logMessage("Failed to create adjusted SRT file: " .. srt_output_path)
         return false
     end
     output_file:write(adjusted_content)
@@ -198,40 +254,121 @@ local function adjustTimestamps(srt_input_path, srt_output_path, chunk_start_tim
     return true
 end
 
--- Function to transcribe audio using Whisper
-local function transcribeAudio(chunk_start_time_ms, callback)
-    logMessage("Starting transcription with Whisper.")
-    local whisper_output = utils.join_path(TMP_DIR, "mpv_whisper_live_sub") -- Output without extension
-    local args = {
-        "-m", WHISPER_MODEL,
-        "-t", tostring(THREADS),
-        "--language", LANGUAGE,
-        "--output-srt",
-        "--file", TMP_WAV_PATH,
-        "--output-file", whisper_output, -- Do not include .srt extension
-        "--beam-size", "5", -- Use beam search with size 5 for better accuracy
-        "--best-of", "5", -- Consider the best of 5 candidates
+-- Helper function to transcribe audio using Whisper
+    local function transcribeAudio(audio_path, whisper_output, adjusted_start_time, callback)
+        local whisper_args = {
+            "-m", WHISPER_MODEL,
+            "-t", tostring(THREADS),
+            "--language", LANGUAGE,
+            "--output-srt",
+            "--file", audio_path,
+            "--output-file", whisper_output,
+            "--beam-size", "5",
+            "--best-of", "5"
+        }
+    
+        runCommand(WHISPER_CMD, whisper_args, function(output, success, elapsed_time)
+            if not success then
+                logMessage("Whisper command failed for transcription.")
+                callback(false)
+                return
+            end
+            callback(true)
+        end)
+    end
+    
+-- Modified transcribeSegment function to pad short segments with silence
+
+local function transcribeSegment(segment, chunk_start_time_ms, callback)
+    logMessage(string.format("Transcribing segment: start=%d ms, end=%d ms", segment.start, segment["end"]))
+
+    local segment_duration_ms = segment["end"] - segment.start
+
+    -- Define paths for the segment audio and transcription
+    local segment_audio_path = utils.join_path(TMP_DIR, string.format("segment_%d_%d.wav", segment.start, segment["end"]))
+    local whisper_output = utils.join_path(TMP_DIR, string.format("mpv_whisper_live_sub_%d_%d", segment.start, segment["end"]))
+
+    -- Extract the specific audio segment using FFmpeg
+    local extract_args = {
+        "-ss", tostring(segment.start / 1000),
+        "-t", tostring(segment_duration_ms / 1000),
+        "-i", TMP_WAV_PATH,
+        "-ac", "1",
+        "-ar", "16000",
+        "-acodec", "pcm_s16le",
+        "-af", "afftdn,volume=2.0,aresample=resampler=soxr",
+        "-y", segment_audio_path
     }
-    runCommand(WHISPER_CMD, args, function(output, success, elapsed_time)
+
+    runCommand(FFMPEG_PATH, extract_args, function(output, success, elapsed_time)
         if not success then
-            logMessage("Whisper command failed.")
-            running = false
+            logMessage("FFmpeg command for segment extraction failed.")
+            callback(false)
             return
         end
-        logMessage("Transcription completed.")
-        local srt_input_path = whisper_output .. ".srt"
-        local srt_adjusted_path = utils.join_path(TMP_DIR, "mpv_whisper_live_sub_adjusted.srt")
-        local adjusted = adjustTimestamps(srt_input_path, srt_adjusted_path, chunk_start_time_ms)
-        if adjusted then
-            appendToMainSRT(srt_adjusted_path)
+
+        if segment_duration_ms < 1000 then
+            local padding_duration_ms = 1000 - segment_duration_ms
+            logMessage("Padding segment with " .. padding_duration_ms .. " ms of silence.")
+
+            -- Apply padding using adelay and apad filters
+            local padded_audio_path = utils.join_path(TMP_DIR, string.format("padded_segment_%d_%d.wav", segment.start, segment["end"]))
+            local pad_args = {
+                "-i", segment_audio_path,
+                "-af", string.format("adelay=0|0,apad=pad_dur=%f", padding_duration_ms / 1000),
+                "-acodec", "pcm_s16le",
+                "-ar", "16000",
+                "-ac", "1",
+                "-y", padded_audio_path
+            }
+
+            runCommand(FFMPEG_PATH, pad_args, function(pad_output, pad_success, pad_elapsed)
+                if not pad_success then
+                    logMessage("FFmpeg command for padding failed.")
+                    callback(false)
+                    return
+                end
+
+                -- Proceed to transcription using the padded audio
+                transcribeAudio(padded_audio_path, whisper_output, chunk_start_time_ms + segment.start, function(transcribe_success)
+                    -- After transcribing and adjusting timestamps
+                    local srt_input_path = whisper_output .. ".srt"
+                    local srt_adjusted_path = utils.join_path(TMP_DIR, string.format("mpv_whisper_live_sub_adjusted_%d_%d.srt", segment.start, segment["end"]))
+                    local adjusted = adjustTimestamps(srt_input_path, srt_adjusted_path, chunk_start_time_ms + segment.start)
+
+                    if adjusted then
+                        appendToMainSRT(srt_adjusted_path)
+                    else
+                        logMessage("Failed to adjust timestamps for segment.")
+                    end
+                    -- Cleanup temporary files
+                    os.remove(segment_audio_path)
+                    os.remove(padded_audio_path)
+                    callback(transcribe_success)
+                end)
+            end)
         else
-            logMessage("Failed to adjust timestamps.")
+            -- Proceed to transcription using the original segment
+            transcribeAudio(segment_audio_path, whisper_output, chunk_start_time_ms + segment.start, function(transcribe_success)
+                -- After transcribing and adjusting timestamps
+                local srt_input_path = whisper_output .. ".srt"
+                local srt_adjusted_path = utils.join_path(TMP_DIR, string.format("mpv_whisper_live_sub_adjusted_%d_%d.srt", segment.start, segment["end"]))
+                local adjusted = adjustTimestamps(srt_input_path, srt_adjusted_path, chunk_start_time_ms + segment.start)
+
+                if adjusted then
+                    appendToMainSRT(srt_adjusted_path)
+                else
+                    logMessage("Failed to adjust timestamps for segment.")
+                end
+                -- Cleanup temporary files
+                os.remove(segment_audio_path)
+                callback(transcribe_success)
+            end)
         end
-        if callback then callback() end
     end)
 end
 
--- Function to process live subtitles
+-- Function to process live subtitles with VAD integration
 local function processLiveSubtitles(media_path)
     logMessage("processLiveSubtitles called with media_path: " .. media_path)
     if loopRunning then
@@ -278,14 +415,39 @@ local function processLiveSubtitles(media_path)
         logMessage("Calling extractAudio.")
         extractAudio(media_path, current_time, chunk_duration_ms, function()
             logMessage("extractAudio callback executed.")
-            transcribeAudio(current_time, function()
-                logMessage("transcribeAudio callback executed.")
-                -- Advance current time
-                current_time = current_time + chunk_duration_ms
-                -- Schedule next chunk
-                if running then
-                    mp.add_timeout(0.5, loop) -- Short delay before next chunk
+            runVAD(function(speech_segments)
+                if #speech_segments == 0 then
+                    logMessage("No speech segments detected in this chunk.")
                 end
+
+                -- Function to process each speech segment sequentially
+                local function processSegments(index)
+                    if index > #speech_segments then
+                        -- All segments processed, advance current_time
+                        current_time = current_time + chunk_duration_ms
+                        -- Schedule next chunk
+                        if running then
+                            mp.add_timeout(0.5, loop) -- Short delay before next chunk
+                        end
+                        return
+                    end
+
+                    local segment = speech_segments[index]
+                    logMessage(string.format("Processing segment %d/%d: start=%d ms, end=%d ms", index, #speech_segments, segment.start, segment["end"]))
+
+                    transcribeSegment(segment, current_time, function(success)
+                        if success then
+                            logMessage(string.format("Segment %d/%d transcribed successfully.", index, #speech_segments))
+                        else
+                            logMessage(string.format("Segment %d/%d transcription failed.", index, #speech_segments))
+                        end
+                        -- Proceed to the next segment
+                        processSegments(index + 1)
+                    end)
+                end
+
+                -- Start processing segments
+                processSegments(1)
             end)
         end)
     end
@@ -297,10 +459,6 @@ end
 local function start()
     logMessage("Start function called.")
     running = true
-
-    -- Store previous sub-ass-override value and set to "force"
-    prev_sub_ass_override = mp.get_property("sub-ass-override")
-    mp.set_property("sub-ass-override", "force")
 
     -- Clear the main subtitle file
     local main_srt_file = io.open(MAIN_SRT_PATH, "w")
@@ -329,14 +487,6 @@ local function stop()
         loopRunning = false
         mp.osd_message("Whisper Subtitles: Stopping...", 2)
         logMessage("User requested to stop Whisper subtitles.")
-
-        -- Restore previous sub-ass-override value
-        if prev_sub_ass_override then
-            mp.set_property("sub-ass-override", prev_sub_ass_override)
-            prev_sub_ass_override = nil
-        else
-            mp.set_property("sub-ass-override", "no")
-        end
     else
         mp.osd_message("Whisper Subtitles: Not running.", 2)
     end
@@ -347,12 +497,16 @@ local function toggle()
     logMessage("Toggle function called.")
     if running then
         stop()
+        mp.commandv('show-text', 'Whisper subtitles: Off')
+        mp.unregister_event("start-file", start)
+        mp.unregister_event("end-file", stop)
     else
         start()
+        mp.commandv('show-text', 'Whisper subtitles: On')
+        mp.register_event("start-file", start)
+        mp.register_event("end-file", stop)
     end
 end
 
--- Key bindings
-mp.add_key_binding("s", "whisper_start", start)
-mp.add_key_binding("S", "whisper_stop", stop)
-mp.add_key_binding("ctrl+w", "whisper_toggle", toggle)
+-- Key binding to toggle the live subtitle processing
+mp.add_key_binding('ctrl+w', 'whisper_subs_toggle', toggle)
