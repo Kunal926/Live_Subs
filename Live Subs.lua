@@ -16,6 +16,7 @@ local MAIN_SRT_PATH = utils.join_path(TMP_DIR, "mpv_whisper_main_subs.srt") -- P
 -- Global state tracking
 local running = false
 local loopRunning = false
+local prev_sub_ass_override = nil
 
 -- Define log file path
 local LOG_FILE_PATH = utils.join_path(TMP_DIR, "mpv_whisper_log.txt")
@@ -297,6 +298,10 @@ local function start()
     logMessage("Start function called.")
     running = true
 
+    -- Store previous sub-ass-override value and set to "force"
+    prev_sub_ass_override = mp.get_property("sub-ass-override")
+    mp.set_property("sub-ass-override", "force")
+
     -- Clear the main subtitle file
     local main_srt_file = io.open(MAIN_SRT_PATH, "w")
     if main_srt_file then
@@ -324,6 +329,14 @@ local function stop()
         loopRunning = false
         mp.osd_message("Whisper Subtitles: Stopping...", 2)
         logMessage("User requested to stop Whisper subtitles.")
+
+        -- Restore previous sub-ass-override value
+        if prev_sub_ass_override then
+            mp.set_property("sub-ass-override", prev_sub_ass_override)
+            prev_sub_ass_override = nil
+        else
+            mp.set_property("sub-ass-override", "no")
+        end
     else
         mp.osd_message("Whisper Subtitles: Not running.", 2)
     end
@@ -334,16 +347,12 @@ local function toggle()
     logMessage("Toggle function called.")
     if running then
         stop()
-        mp.commandv('show-text', 'Whisper subtitles: Off')
-        mp.unregister_event("start-file", start)
-        mp.unregister_event("end-file", stop)
     else
         start()
-        mp.commandv('show-text', 'Whisper subtitles: On')
-        mp.register_event("start-file", start)
-        mp.register_event("end-file", stop)
     end
 end
 
--- Key binding to toggle the live subtitle processing
-mp.add_key_binding('ctrl+w', 'whisper_subs_toggle', toggle)
+-- Key bindings
+mp.add_key_binding("s", "whisper_start", start)
+mp.add_key_binding("S", "whisper_stop", stop)
+mp.add_key_binding("ctrl+w", "whisper_toggle", toggle)
