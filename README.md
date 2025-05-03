@@ -1,7 +1,3 @@
-# Live_Subs
-
-LiveSubs is a mpv lua script to generate subtitles at runtime with whisper.cpp on windows
-
 # Live_Subs: Real-time Subtitles with Whisper.cpp
 
 This project generates live subtitles for system audio (or other specified audio inputs) using the efficient Whisper.cpp implementation of OpenAI's Whisper model.
