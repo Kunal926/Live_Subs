@@ -9,12 +9,12 @@ local mp = require 'mp'
 -- #########################################################################
 
 -- Ensure these paths are correct for your system
-local FFMPEG_PATH = "C:/Live Caption/ffmpeg-7.1.1-full_build/bin/ffmpeg.exe"
-local WHISPER_CMD = "C:/Live Caption/Whisper/Release/whisper-cli.exe"
-local WHISPER_MODEL = "C:/Live Caption/ggml-large-v3-turbo.bin"
-local VAD_SCRIPT = "C:/Live Caption/VAD/vad_script.py" -- Path to your Python VAD script
+local FFMPEG_PATH = "./ffmpeg-7.1.1-full_build/bin/ffmpeg.exe"
+local WHISPER_CMD = "./Whisper/Release/whisper-cli.exe"
+local WHISPER_MODEL = "./ggml-large-v3-turbo.bin"
+local VAD_SCRIPT = ".VAD/vad_script.py" -- Path to your Python VAD script
 local PYTHON_EXECUTABLE = "python" -- Or the full path to your python.exe if not in PATH
-local TMP_DIR = "C:/temp" -- Ensure this directory exists and MPV can write to it
+local TMP_DIR = "./temp" -- Ensure this directory exists and MPV can write to it
 
 -- Temporary file paths
 local TMP_WAV_PATH = utils.join_path(TMP_DIR, "mpv_whisper_live_tmp.wav") -- For the whole chunk
