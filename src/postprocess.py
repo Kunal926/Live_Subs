@@ -1,6 +1,12 @@
+"""
+Post-processing module for subtitle timing and formatting.
+
+Handles timing adjustments, subtitle shaping, and formatting operations
+including CPS optimization, gap enforcement, and text reshaping.
+"""
 from typing import List, Dict, Any
 
-HARD_PUNCT = (".","!","?","…",":",";")
+HARD_PUNCT = (".", "!", "?", "…", ":", ";")
 SOFT_PUNCT = (",",)
 
 def _wtext(w: Dict[str,Any]) -> str:
@@ -59,7 +65,7 @@ def apply_extension_then_merge(events, target_cps=22.0, max_silence_s=1.0, max_c
         ev = events[i]
         txt_len = len(" ".join(_wtext(w) for w in ev["words"]))
         dur = ev["end"] - ev["start"]
-        cps = txt_len / max(0.01, dur)
+        cps = txt_len / max(0.1, dur)
         if cps <= target_cps and dur >= 1.0:
             i += 1; continue
         next_ev = events[i+1] if i < len(events)-1 else None
@@ -122,6 +128,9 @@ def apply_hybrid_linger_with_report(events: List[Dict[str, Any]], linger_ms: int
     return events
 
 def enforce_timing_constraints(events, min_dur=1.0, min_gap=0.084):
+    """
+    Enforces minimum gap between consecutive events and minimum duration.
+    """
     if not events:
         return events
 

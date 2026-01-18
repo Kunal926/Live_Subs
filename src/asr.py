@@ -1,3 +1,9 @@
+"""
+ASR module for transcription using faster-whisper.
+
+Provides smart segmentation based on pauses, character limits, and punctuation.
+Uses faster-whisper with word-level timestamps for accurate subtitle generation.
+"""
 import torch
 import logging
 from typing import List, Dict, Any

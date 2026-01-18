@@ -1,3 +1,9 @@
+"""
+Audio processing module for media file handling.
+
+Provides functions for probing, extracting, and preprocessing audio
+using ffmpeg and ffprobe.
+"""
 import subprocess
 import json
 import logging

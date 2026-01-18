@@ -1,3 +1,8 @@
+"""
+Vocal separation module using audio-separator.
+
+Isolates vocal tracks from audio using BS-Roformer-Viperx model (FV4).
+"""
 import os
 import logging
 from audio_separator.separator import Separator
@@ -54,6 +59,8 @@ def separate_vocals(input_path, output_dir):
         if os.path.exists(full_path):
             return full_path
 
-    # If we are here, something is wrong with paths (file doesn't exist yet?)
-    # Return the expected path constructed from the first valid filename.
-    return os.path.join(output_dir, valid_files[0])
+    # If we are here, something is wrong with paths: none of the expected output files exist.
+    raise RuntimeError(
+        f"Separation failed: none of the expected output files exist in '{output_dir}'. "
+        f"Reported output files: {output_files}"
+    )

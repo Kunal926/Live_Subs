@@ -14,8 +14,8 @@ for package in packages_to_collect:
         datas += tmp_ret[0]
         binaries += tmp_ret[1]
         hiddenimports += tmp_ret[2]
-    except Exception:
-        pass
+    except (ImportError, ModuleNotFoundError) as e:
+        print(f"Warning: failed to collect package {package!r}: {e}")
 
 block_cipher = None
 

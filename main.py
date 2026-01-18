@@ -1,9 +1,19 @@
+"""
+LiveSubs/Srtforge Remake - Main entry point.
+
+A modular subtitle generation pipeline that mimics Srtforge audio processing:
+- Probe and extract audio (48kHz)
+- Separate vocals using BS-Roformer (FV4)
+- Preprocess for Whisper (16kHz)
+- Transcribe with faster-whisper
+- Post-process timing and formatting
+- Correct text with Gemini API
+"""
 import os
 import sys
 import argparse
 import logging
 import tempfile
-import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,17 +84,15 @@ def run_pipeline(input_path, output_srt, work_dir, args):
     # 3. Separate Vocals
     # separate_vocals takes input path and output DIR.
     # It returns the full path to the vocal file.
-    vocab_wav_path = separate_vocals(extracted_wav, work_dir)
-
-    if not vocab_wav_path or not os.path.exists(vocab_wav_path):
-         logging.error(f"Vocal separation failed; invalid vocal path returned: {vocab_wav_path}")
-         raise FileNotFoundError(f"Vocal track not found at path: {vocab_wav_path}")
-
-    logging.info(f"Vocals separated: {vocab_wav_path}")
+    vocal_wav_path = separate_vocals(extracted_wav, work_dir)
+    if not vocal_wav_path or not os.path.exists(vocal_wav_path):
+        logging.error(f"Vocal separation failed; invalid vocal path returned: {vocal_wav_path}")
+        raise FileNotFoundError(f"Vocal track not found at path: {vocal_wav_path}")
+    logging.info(f"Vocals separated: {vocal_wav_path}")
 
     # 4. Preprocess (16k Mono)
     final_wav = os.path.join(work_dir, "preprocessed_16k.wav")
-    preprocess_audio(vocab_wav_path, final_wav)
+    preprocess_audio(vocal_wav_path, final_wav)
 
     # 5. ASR
     events = transcribe_audio(final_wav)
