@@ -1,6 +1,11 @@
+"""
+Audio processing module for media file handling.
+
+Provides functions for probing, extracting, and preprocessing audio
+using ffmpeg and ffprobe.
+"""
 import subprocess
 import json
-import sys
 import logging
 
 def probe_file(filepath):
@@ -67,7 +72,11 @@ def extract_audio(input_path, stream_index, output_path):
         output_path
     ]
     logging.info(f"Extracting stream {stream_index} to {output_path}...")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"ffmpeg extraction failed: {e.stderr}")
+        raise RuntimeError(f"Failed to extract audio from {input_path}") from e
 
 def preprocess_audio(input_path, output_path):
     """
@@ -86,4 +95,8 @@ def preprocess_audio(input_path, output_path):
         output_path
     ]
     logging.info(f"Preprocessing {input_path} -> {output_path}...")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"ffmpeg preprocessing failed: {e.stderr}")
+        raise RuntimeError(f"Failed to preprocess audio from {input_path}") from e

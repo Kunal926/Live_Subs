@@ -1,3 +1,9 @@
+"""
+Gemini API integration for text correction.
+
+Handles subtitle text correction using Google's Gemini API,
+including spelling fixes, typo corrections, and style guide enforcement.
+"""
 import os
 import logging
 from google import genai
@@ -18,6 +24,9 @@ def correct_text_only_with_gemini(audio_path, events):
     # Upload file
     try:
         file_ref = client.files.upload(file=audio_path)
+        if not file_ref:
+            logging.error("Upload to Gemini returned an invalid or empty file reference.")
+            return events
     except Exception as e:
         logging.error(f"Failed to upload audio to Gemini: {e}")
         return events
@@ -38,7 +47,7 @@ def correct_text_only_with_gemini(audio_path, events):
     TASK:
     1. Listen to the audio to identify correct Name spellings (Context: Anime).
        * Pay attention to Character Names, Locations, and specific Terminology.
-       * Maintain standard romanization for Japanese(Anime) names (e.g. 'Satou', 'Kyouma').
+       * Maintain standard romanization for Japanese (Anime) names (e.g. 'Satou', 'Kyouma').
     2. Fix phonetic typos and capitalization.
     3. STRICTLY follow the STYLE GUIDE below.
 
@@ -77,15 +86,21 @@ def correct_text_only_with_gemini(audio_path, events):
         )
 
         corrected_map = {}
-        if response.text:
-            raw_response = response.text.strip()
-            for line in raw_response.split('\n'):
-                if "|" in line:
-                    parts = line.split("|", 1)
-                    if len(parts) == 2 and parts[0].strip().isdigit():
-                        idx = int(parts[0].strip())
-                        new_text = parts[1].strip()
-                        corrected_map[idx] = new_text
+        response_text = getattr(response, "text", None)
+        if response_text is None:
+            logging.warning("Gemini response.text is None; no corrections returned.")
+        else:
+            raw_response = response_text.strip()
+            if not raw_response:
+                logging.info("Gemini returned empty text; no corrections to apply.")
+            else:
+                for line in raw_response.split('\n'):
+                    if "|" in line:
+                        parts = line.split("|", 1)
+                        if len(parts) == 2 and parts[0].strip().isdigit():
+                            idx = int(parts[0].strip())
+                            new_text = parts[1].strip()
+                            corrected_map[idx] = new_text
 
         logging.info(f"Received {len(corrected_map)} corrected lines.")
 
