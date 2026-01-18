@@ -1,3 +1,5 @@
+audio-separator[gpu]
+faster-whisper
+google-genai
 torch
 torchaudio
-numpy
