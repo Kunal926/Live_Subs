@@ -38,7 +38,7 @@ def correct_text_only_with_gemini(audio_path, events):
     TASK:
     1. Listen to the audio to identify correct Name spellings (Context: Anime).
        * Pay attention to Character Names, Locations, and specific Terminology.
-       * Maintain standard romanization for Japanese(Anime) names (e.g. 'Satou', 'Kyouma').
+       * Maintain standard romanization for Japanese (Anime) names (e.g. 'Satou', 'Kyouma').
     2. Fix phonetic typos and capitalization.
     3. STRICTLY follow the STYLE GUIDE below.
 

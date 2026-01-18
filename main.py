@@ -30,13 +30,24 @@ def main():
         if args.keep_temp:
             work_dir = os.path.join(os.getcwd(), "temp")
             os.makedirs(work_dir, exist_ok=True)
-            run_pipeline(input_path, output_srt, work_dir, args)
+            try:
+                run_pipeline(input_path, output_srt, work_dir, args)
+            except Exception:
+                # If keeping temp, we don't delete. Just re-raise.
+                raise
         else:
+            # TemporaryDirectory handles cleanup automatically, even on error.
+            # But just to be robust and explicit as per review:
             with tempfile.TemporaryDirectory() as temp_dir:
-                run_pipeline(input_path, output_srt, temp_dir, args)
+                try:
+                    run_pipeline(input_path, output_srt, temp_dir, args)
+                except Exception:
+                     # TemporaryDirectory __exit__ will clean up.
+                     raise
 
     except Exception as e:
         logging.error(f"Processing failed: {e}")
+        # Only print stack trace if it's not a user error (sys.exit(1) cases handled earlier)
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -64,6 +75,11 @@ def run_pipeline(input_path, output_srt, work_dir, args):
     # separate_vocals takes input path and output DIR.
     # It returns the full path to the vocal file.
     vocab_wav_path = separate_vocals(extracted_wav, work_dir)
+
+    if not vocab_wav_path or not os.path.exists(vocab_wav_path):
+         logging.error(f"Vocal separation failed; invalid vocal path returned: {vocab_wav_path}")
+         raise FileNotFoundError(f"Vocal track not found at path: {vocab_wav_path}")
+
     logging.info(f"Vocals separated: {vocab_wav_path}")
 
     # 4. Preprocess (16k Mono)

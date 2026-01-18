@@ -3,7 +3,7 @@ import logging
 from typing import List, Dict, Any
 from faster_whisper import WhisperModel
 
-HARD_PUNCT = (".","!","?","…",":",";")
+HARD_PUNCT = (".", "!", "?", "…", ":", ";")
 SOFT_PUNCT = (",",)
 
 def _wtext(w: Dict[str,Any]) -> str:

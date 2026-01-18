@@ -1,6 +1,5 @@
 import subprocess
 import json
-import sys
 import logging
 
 def probe_file(filepath):
@@ -67,7 +66,11 @@ def extract_audio(input_path, stream_index, output_path):
         output_path
     ]
     logging.info(f"Extracting stream {stream_index} to {output_path}...")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error extracting audio: {e}")
+        raise
 
 def preprocess_audio(input_path, output_path):
     """
@@ -86,4 +89,8 @@ def preprocess_audio(input_path, output_path):
         output_path
     ]
     logging.info(f"Preprocessing {input_path} -> {output_path}...")
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error preprocessing audio: {e}")
+        raise
