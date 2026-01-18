@@ -1,4 +1,4 @@
-# LiveSubs/Srtforge Remake
+# LiveSubs Remake
 
 A modular subtitle generation pipeline that mimics Srtforge audio processing workflow.
 
