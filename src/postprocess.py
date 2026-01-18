@@ -131,21 +131,32 @@ def enforce_timing_constraints(events, min_dur=1.0, min_gap=0.084):
     """
     Enforces minimum gap between consecutive events and minimum duration.
     """
+    if not events:
+        return events
+
     # Ensure minimum gap between consecutive events and respect minimum duration where possible.
     for i in range(len(events) - 1):
         cur = events[i]
         nxt = events[i + 1]
+
         # Enforce minimum gap by adjusting the end of the current event if needed.
         if nxt["start"] - cur["end"] < min_gap:
             cur["end"] = nxt["start"] - min_gap
+
         # Ensure the current event has at least min_dur duration, without violating min_gap.
         max_end = nxt["start"] - min_gap
         desired_end = cur["start"] + min_dur
         if desired_end > cur["end"]:
-            cur["end"] = min(desired_end, max_end)
+            # Only extend if we don't overlap into the next event (minus gap)
+            if desired_end <= max_end:
+                 cur["end"] = desired_end
+            else:
+                 cur["end"] = max_end
+
         # Safety: avoid zero or negative durations.
         if cur["end"] <= cur["start"]:
             cur["end"] = cur["start"] + 0.1
+
     # Handle the last event separately: only enforce minimum duration.
     if events:
         last = events[-1]
@@ -153,6 +164,7 @@ def enforce_timing_constraints(events, min_dur=1.0, min_gap=0.084):
             last["end"] = last["start"] + min_dur
         if last["end"] <= last["start"]:
             last["end"] = last["start"] + 0.1
+
     return events
 
 def _fmt_ms(t): return f"{int(t//3600):02}:{int((t%3600)//60):02}:{int(t%60):02},{int((t*1000)%1000):03}"

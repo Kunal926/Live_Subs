@@ -73,10 +73,10 @@ def extract_audio(input_path, stream_index, output_path):
     ]
     logging.info(f"Extracting stream {stream_index} to {output_path}...")
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"ffmpeg extraction failed: {e.stderr}")
-        raise RuntimeError(f"Failed to extract audio from {input_path}") from e
+        logging.error(f"Error extracting audio: {e}")
+        raise
 
 def preprocess_audio(input_path, output_path):
     """
@@ -96,7 +96,7 @@ def preprocess_audio(input_path, output_path):
     ]
     logging.info(f"Preprocessing {input_path} -> {output_path}...")
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"ffmpeg preprocessing failed: {e.stderr}")
-        raise RuntimeError(f"Failed to preprocess audio from {input_path}") from e
+        logging.error(f"Error preprocessing audio: {e}")
+        raise
