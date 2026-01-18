@@ -7,7 +7,7 @@ including CPS optimization, gap enforcement, and text reshaping.
 from typing import List, Dict, Any
 
 HARD_PUNCT = (".", "!", "?", "…", ":", ";")
-SOFT_PUNCT = (",", )
+SOFT_PUNCT = (",",)
 
 def _wtext(w: Dict[str,Any]) -> str:
     return (w.get("word") or "").strip()
